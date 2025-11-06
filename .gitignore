@@ -39,3 +39,37 @@
 
 # debug information files
 *.dwo
+
+# Build artifacts
+build*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Third-party (downloaded)
+third_party/tensorflow/
+third_party/libs/
+third_party/cnpy/
+third_party/stb/
+third_party/*.aar
+third_party/*-extracted/
+
+# Test files and models
+*.tflite
+*.npy
+*.png
+*.jpg
+*.jpeg
+
+# Temporary files
+*.tmp
+*.log
