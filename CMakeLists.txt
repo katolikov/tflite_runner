@@ -12,13 +12,13 @@ endif()
 
 # TensorFlow Lite paths
 set(TFLITE_DIR "${CMAKE_SOURCE_DIR}/third_party/tensorflow/lite")
-set(TFLITE_LIB_DIR "${CMAKE_SOURCE_DIR}/third_party/tensorflow/libs/${ANDROID_ABI}")
+# Shared libraries extracted from AARs are stored under third_party/libs/<abi>
+set(TFLITE_LIB_DIR "${CMAKE_SOURCE_DIR}/third_party/libs/${ANDROID_ABI}")
 
 # Include directories
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/third_party/tensorflow
-    ${CMAKE_SOURCE_DIR}/third_party/tensorflow/lite
+    ${CMAKE_SOURCE_DIR}/third_party
     ${CMAKE_SOURCE_DIR}/third_party/tensorflow/lite/tools/make/downloads/flatbuffers/include
     ${CMAKE_SOURCE_DIR}/third_party/stb
     ${CMAKE_SOURCE_DIR}/third_party/cnpy
@@ -37,10 +37,10 @@ set(SOURCES
 add_executable(tflite_runner ${SOURCES})
 
 # Link TensorFlow Lite libraries
-# Note: Using shared libraries from AAR
+# Note: Using shared libraries from AAR (JNI .so names)
 target_link_libraries(tflite_runner
-    ${TFLITE_LIB_DIR}/libtensorflowlite.so
-    ${TFLITE_LIB_DIR}/libtensorflowlite_gpu_delegate.so
+    ${TFLITE_LIB_DIR}/libtensorflowlite_jni.so
+    ${TFLITE_LIB_DIR}/libtensorflowlite_gpu_jni.so
     android
     log
     z

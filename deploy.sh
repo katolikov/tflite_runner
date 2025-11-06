@@ -53,12 +53,12 @@ adb push "$BUILD_DIR/tflite_runner" "$DEVICE_DIR/"
 
 # Push required shared libraries
 echo "Pushing shared libraries..."
-if [ -f "third_party/libs/$ANDROID_ABI/libtensorflowlite.so" ]; then
-    adb push "third_party/libs/$ANDROID_ABI/libtensorflowlite.so" "$DEVICE_DIR/"
+if [ -f "third_party/libs/$ANDROID_ABI/libtensorflowlite_jni.so" ]; then
+    adb push "third_party/libs/$ANDROID_ABI/libtensorflowlite_jni.so" "$DEVICE_DIR/"
 fi
 
-if [ -f "third_party/libs/$ANDROID_ABI/libtensorflowlite_gpu_delegate.so" ]; then
-    adb push "third_party/libs/$ANDROID_ABI/libtensorflowlite_gpu_delegate.so" "$DEVICE_DIR/"
+if [ -f "third_party/libs/$ANDROID_ABI/libtensorflowlite_gpu_jni.so" ]; then
+    adb push "third_party/libs/$ANDROID_ABI/libtensorflowlite_gpu_jni.so" "$DEVICE_DIR/"
 fi
 
 if [ -f "$BUILD_DIR/libc++_shared.so" ]; then

@@ -26,11 +26,14 @@ git sparse-checkout set tensorflow/lite
 echo "Copying TensorFlow Lite headers..."
 cp -r tensorflow/lite "$DOWNLOAD_DIR/"
 
-# Also get flatbuffers
-echo "Getting FlatBuffers..."
+# Also get FlatBuffers pinned to the version expected by TF Lite v2.14 (23.5.26)
+echo "Getting FlatBuffers (v23.5.26)..."
 mkdir -p "$SCRIPT_DIR/tensorflow/lite/tools/make/downloads"
 cd "$SCRIPT_DIR/tensorflow/lite/tools/make/downloads"
-git clone --depth 1 https://github.com/google/flatbuffers.git
+if [ -d flatbuffers ]; then
+	rm -rf flatbuffers
+fi
+git clone --depth 1 -b v23.5.26 https://github.com/google/flatbuffers.git
 
 # Clean up
 echo "Cleaning up..."

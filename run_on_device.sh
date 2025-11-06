@@ -216,8 +216,11 @@ $ADB shell "mkdir -p $DEVICE_DIR"
 $ADB push "$BUILD_DIR/tflite_runner" "$DEVICE_DIR/" > /dev/null
 
 # Push shared libraries
-if [ -f "third_party/libs/$ANDROID_ABI/libtensorflowlite_gpu_delegate.so" ]; then
-    $ADB push "third_party/libs/$ANDROID_ABI/libtensorflowlite_gpu_delegate.so" "$DEVICE_DIR/" > /dev/null
+if [ -f "third_party/libs/$ANDROID_ABI/libtensorflowlite_jni.so" ]; then
+    $ADB push "third_party/libs/$ANDROID_ABI/libtensorflowlite_jni.so" "$DEVICE_DIR/" > /dev/null
+fi
+if [ -f "third_party/libs/$ANDROID_ABI/libtensorflowlite_gpu_jni.so" ]; then
+    $ADB push "third_party/libs/$ANDROID_ABI/libtensorflowlite_gpu_jni.so" "$DEVICE_DIR/" > /dev/null
 fi
 
 $ADB shell "chmod +x $DEVICE_DIR/tflite_runner"
