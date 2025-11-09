@@ -58,6 +58,8 @@ function show_usage() {
     echo "  -l, --list             List available devices"
     echo "  --input PATH          Add an input .npy file (repeat for multiple inputs)"
     echo "  --inputs CSV          Comma-separated list of input .npy files"
+    echo "  --output PATH         Add an output .npy path (repeat). If omitted, files will be auto-named."
+    echo "  --output-dir PATH     Host directory for auto outputs (default: ./outputs)"
     echo "  --no-gpu              Disable GPU acceleration"
     echo "  -h, --help            Show this help message"
     echo ""
@@ -144,7 +146,10 @@ DEVICE_SERIAL=""
 LIST_ONLY=false
 USE_GPU=true
 INPUT_FILES=()
+OUTPUT_FILES=()
+HOST_OUTPUT_DIR="outputs"
 POSITIONAL=()
+OUTPUT_PNG=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -182,6 +187,22 @@ while [[ $# -gt 0 ]]; do
             done
             shift 2
             ;;
+        --output)
+            if [ $# -lt 2 ]; then
+                echo -e "${RED}Error: --output requires a path${NC}"
+                exit 1
+            fi
+            OUTPUT_FILES+=("$2")
+            shift 2
+            ;;
+        --output-dir)
+            if [ $# -lt 2 ]; then
+                echo -e "${RED}Error: --output-dir requires a path${NC}"
+                exit 1
+            fi
+            HOST_OUTPUT_DIR="$2"
+            shift 2
+            ;;
         -h|--help)
             show_usage
             exit 0
@@ -213,27 +234,32 @@ if [ -z "$NDK_PATH" ]; then
 fi
 
 # Validate arguments / legacy positional handling
+if [ $# -lt 1 ]; then
+    echo -e "${RED}Error: Missing model path${NC}"
+    echo ""
+    show_usage
+    exit 1
+fi
+
+MODEL_PATH="$1"
+shift
+
 if [ ${#INPUT_FILES[@]} -eq 0 ]; then
-    if [ $# -lt 3 ]; then
-        echo -e "${RED}Error: Missing required arguments${NC}"
-        echo ""
-        show_usage
+    if [ $# -lt 1 ]; then
+        echo -e "${RED}Error: Missing input .npy (use --input)${NC}"
         exit 1
     fi
-    MODEL_PATH="$1"
-    INPUT_FILES+=("$2")
-    OUTPUT_NPY="$3"
-    OUTPUT_PNG="${4:-}"
-else
-    if [ $# -lt 2 ]; then
-        echo -e "${RED}Error: Missing required arguments (need model and output)${NC}"
-        echo ""
-        show_usage
-        exit 1
-    fi
-    MODEL_PATH="$1"
-    OUTPUT_NPY="$2"
-    OUTPUT_PNG="${3:-}"
+    INPUT_FILES+=("$1")
+    shift
+fi
+
+if [ ${#OUTPUT_FILES[@]} -eq 0 ] && [ $# -ge 1 ]; then
+    OUTPUT_FILES+=("$1")
+    shift
+fi
+
+if [ $# -ge 1 ]; then
+    OUTPUT_PNG="$1"
 fi
 
 # Check if files exist
@@ -271,7 +297,14 @@ echo -e "${GREEN}Inputs:${NC}"
 for idx in "${!INPUT_FILES[@]}"; do
     echo "  [$idx] ${INPUT_FILES[$idx]}"
 done
-echo -e "${GREEN}Output NPY:          ${NC} $OUTPUT_NPY"
+if [ ${#OUTPUT_FILES[@]} -gt 0 ]; then
+    echo -e "${GREEN}Output files:${NC}"
+    for idx in "${!OUTPUT_FILES[@]}"; do
+        echo "  [$idx] ${OUTPUT_FILES[$idx]}"
+    done
+else
+    echo -e "${GREEN}Outputs:${NC} auto-named in \"$HOST_OUTPUT_DIR\" (will mirror device output directory)"
+fi
 if [ -n "$OUTPUT_PNG" ]; then
     echo -e "${GREEN}Output PNG:          ${NC} $OUTPUT_PNG"
 fi
@@ -294,7 +327,15 @@ INPUT_BASENAMES=()
 for input_file in "${INPUT_FILES[@]}"; do
     INPUT_BASENAMES+=("$(basename "$input_file")")
 done
-OUTPUT_BASENAME=$(basename "$OUTPUT_NPY")
+OUTPUT_BASENAMES=()
+for output_file in "${OUTPUT_FILES[@]}"; do
+    OUTPUT_BASENAMES+=("$(basename "$output_file")")
+done
+USE_AUTO_OUTPUT=true
+DEVICE_OUTPUT_DIR="outputs_device"
+if [ ${#OUTPUT_FILES[@]} -gt 0 ]; then
+    USE_AUTO_OUTPUT=false
+fi
 OUTPUT_PNG_BASENAME=""
 if [ -n "$OUTPUT_PNG" ]; then
     OUTPUT_PNG_BASENAME=$(basename "$OUTPUT_PNG")
@@ -309,6 +350,10 @@ fi
 # Deploy
 echo "Step 1: Deploying to device..."
 $ADB shell "mkdir -p $DEVICE_DIR"
+$ADB shell "rm -rf $DEVICE_DIR/$DEVICE_OUTPUT_DIR" > /dev/null
+if [ "$USE_AUTO_OUTPUT" = true ]; then
+    $ADB shell "mkdir -p $DEVICE_DIR/$DEVICE_OUTPUT_DIR" > /dev/null
+fi
 $ADB push "$BUILD_DIR/tflite_runner" "$DEVICE_DIR/" > /dev/null
 
 # Push shared libraries
@@ -340,7 +385,13 @@ CMD="cd $DEVICE_DIR && LD_LIBRARY_PATH=. ./tflite_runner --model $MODEL_BASENAME
 for base in "${INPUT_BASENAMES[@]}"; do
     CMD="$CMD --input $base"
 done
-CMD="$CMD --output $OUTPUT_BASENAME"
+if [ "$USE_AUTO_OUTPUT" = true ]; then
+    CMD="$CMD --output-dir $DEVICE_OUTPUT_DIR"
+else
+    for base in "${OUTPUT_BASENAMES[@]}"; do
+        CMD="$CMD --output $base"
+    done
+fi
 
 if [ -n "$OUTPUT_PNG_BASENAME" ]; then
     CMD="$CMD --output-png $OUTPUT_PNG_BASENAME"
@@ -360,9 +411,18 @@ echo -e "${BLUE}============================================${NC}"
 # Pull results
 echo ""
 echo "Step 4: Retrieving results..."
-mkdir -p "$(dirname "$OUTPUT_NPY")" >/dev/null 2>&1
-$ADB pull "$DEVICE_DIR/$OUTPUT_BASENAME" "$OUTPUT_NPY" > /dev/null
-echo "  ✓ $OUTPUT_NPY"
+if [ "$USE_AUTO_OUTPUT" = true ]; then
+    mkdir -p "$HOST_OUTPUT_DIR"
+    $ADB pull "$DEVICE_DIR/$DEVICE_OUTPUT_DIR/." "$HOST_OUTPUT_DIR" > /dev/null
+    echo "  ✓ Auto outputs copied to $HOST_OUTPUT_DIR"
+else
+    for idx in "${!OUTPUT_FILES[@]}"; do
+        dest="${OUTPUT_FILES[$idx]}"
+        mkdir -p "$(dirname "$dest")" >/dev/null 2>&1
+        $ADB pull "$DEVICE_DIR/${OUTPUT_BASENAMES[$idx]}" "$dest" > /dev/null
+        echo "  ✓ $dest"
+    done
+fi
 
 if [ -n "$OUTPUT_PNG" ]; then
     if $ADB shell "test -f $DEVICE_DIR/$OUTPUT_PNG_BASENAME" 2>/dev/null; then

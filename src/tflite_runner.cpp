@@ -530,6 +530,21 @@ int TFLiteRunner::GetOutputTensorCount() const {
     return interpreter_ ? TfLiteInterpreterGetOutputTensorCount(interpreter_) : 0;
 }
 
+std::string TFLiteRunner::GetOutputTensorName(int index) const {
+    if (!interpreter_) {
+        return "";
+    }
+    const int count = TfLiteInterpreterGetOutputTensorCount(interpreter_);
+    if (index < 0 || index >= count) {
+        return "";
+    }
+    const TfLiteTensor* tensor = TfLiteInterpreterGetOutputTensor(interpreter_, index);
+    if (!tensor || !tensor->name) {
+        return "";
+    }
+    return tensor->name;
+}
+
 OpPlacementStats TFLiteRunner::GetOpPlacementStats() const {
     OpPlacementStats stats;
     if (!interpreter_ || !interpreter_->impl) {

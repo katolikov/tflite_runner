@@ -67,6 +67,7 @@ public:
     // Get tensor information
     int GetInputTensorCount() const;
     int GetOutputTensorCount() const;
+    std::string GetOutputTensorName(int index = 0) const;
 
     // Get timing statistics
     const TimingStats& GetTimingStats() const { return timing_stats_; }
