@@ -545,6 +545,47 @@ std::string TFLiteRunner::GetOutputTensorName(int index) const {
     return tensor->name;
 }
 
+bool TFLiteRunner::ApplyInputShapes(const std::vector<std::vector<int>>& shapes) {
+    if (!interpreter_) {
+        LOGE("Interpreter is not initialized");
+        return false;
+    }
+    const int expected = TfLiteInterpreterGetInputTensorCount(interpreter_);
+    if (static_cast<int>(shapes.size()) > expected) {
+        LOGE("Provided %zu input shapes but interpreter expects %d", shapes.size(), expected);
+        return false;
+    }
+    bool resized = false;
+    for (size_t i = 0; i < shapes.size(); ++i) {
+        const TfLiteTensor* tensor = TfLiteInterpreterGetInputTensor(interpreter_, static_cast<int>(i));
+        if (!tensor) {
+            LOGE("Failed to get input tensor %zu for resize", i);
+            return false;
+        }
+        bool different = tensor->dims->size != static_cast<int>(shapes[i].size());
+        if (!different) {
+            for (size_t j = 0; j < shapes[i].size(); ++j) {
+                if (tensor->dims->data[j] != shapes[i][j]) {
+                    different = true;
+                    break;
+                }
+            }
+        }
+        if (different) {
+            std::vector<int> dims = shapes[i];
+            if (TfLiteInterpreterResizeInputTensor(interpreter_, static_cast<int>(i), dims.data(), dims.size()) != kTfLiteOk) {
+                LOGE("Failed to resize input %zu", i);
+                return false;
+            }
+            resized = true;
+        }
+    }
+    if (resized) {
+        tensors_allocated_ = false;
+    }
+    return true;
+}
+
 OpPlacementStats TFLiteRunner::GetOpPlacementStats() const {
     OpPlacementStats stats;
     if (!interpreter_ || !interpreter_->impl) {

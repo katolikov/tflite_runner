@@ -202,7 +202,9 @@ int main(int argc, char* argv[]) {
     // Load input data
     std::cout << "Loading input data...\n";
     std::vector<std::vector<float>> inputs_data;
+    std::vector<std::vector<size_t>> input_shapes;
     inputs_data.reserve(config.input_paths.size());
+    input_shapes.reserve(config.input_paths.size());
     
     for (size_t idx = 0; idx < config.input_paths.size(); ++idx) {
         const auto& input_path = config.input_paths[idx];
@@ -222,6 +224,7 @@ int main(int argc, char* argv[]) {
         std::cout << "], size = " << input_data.size() << "\n";
         
         inputs_data.push_back(std::move(input_data));
+        input_shapes.push_back(input_shape);
     }
     
     int model_input_count = runner.GetInputTensorCount();
@@ -240,6 +243,26 @@ int main(int argc, char* argv[]) {
         std::cerr << "Warning: Model expects " << model_input_count
                   << " inputs but " << inputs_data.size()
                   << " were provided.\n";
+    }
+
+    if (!input_shapes.empty()) {
+        std::vector<std::vector<int>> desired_shapes;
+        const size_t limit = std::min(input_shapes.size(), static_cast<size_t>(model_input_count));
+        desired_shapes.reserve(limit);
+        for (size_t i = 0; i < limit; ++i) {
+            std::vector<int> dims;
+            dims.reserve(input_shapes[i].size());
+            for (size_t dim : input_shapes[i]) {
+                dims.push_back(static_cast<int>(dim));
+            }
+            desired_shapes.push_back(std::move(dims));
+        }
+        if (!desired_shapes.empty()) {
+            if (!runner.ApplyInputShapes(desired_shapes)) {
+                std::cerr << "Failed to apply input shapes from NPY metadata\n";
+                return 1;
+            }
+        }
     }
     
     // Run inference

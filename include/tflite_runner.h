@@ -68,6 +68,7 @@ public:
     int GetInputTensorCount() const;
     int GetOutputTensorCount() const;
     std::string GetOutputTensorName(int index = 0) const;
+    bool ApplyInputShapes(const std::vector<std::vector<int>>& shapes);
 
     // Get timing statistics
     const TimingStats& GetTimingStats() const { return timing_stats_; }
