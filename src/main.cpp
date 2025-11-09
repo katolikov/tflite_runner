@@ -155,6 +155,46 @@ int main(int argc, char* argv[]) {
     }
     
     std::cout << "Inference completed successfully\n";
+    runner.PrintProfilingInfo();
+    
+    const auto& timing = runner.GetTimingStats();
+    std::cout << std::fixed << std::setprecision(2);
+    std::cout << "\nTiming profile (ms):\n";
+    std::cout << "  Model load:        " << timing.model_load_ms << "\n";
+    std::cout << "  Delegate init:     " << timing.delegate_init_ms << "\n";
+    std::cout << "  Tensor allocation: " << timing.tensor_allocation_ms << "\n";
+    std::cout << "  Input copy:        " << timing.input_copy_ms << "\n";
+    std::cout << "  Inference:         " << timing.inference_ms << "\n";
+    std::cout << "  Output copy:       " << timing.output_copy_ms << "\n";
+    std::cout << "  Total:             " << timing.total_ms << "\n";
+    std::cout << std::defaultfloat;
+    
+    const auto& mem = runner.GetMemoryAfterInference();
+    if (mem.rss_kb > 0 || mem.vm_kb > 0) {
+        std::cout << "\nMemory after inference (kB):\n";
+        std::cout << "  RSS: " << mem.rss_kb << "\n";
+        std::cout << "  VM:  " << mem.vm_kb << "\n";
+    }
+
+    const auto& gpu_mem = runner.GetGpuMemoryAfterInference();
+    if (gpu_mem.available) {
+        std::cout << "\nGPU memory snapshot (" << gpu_mem.source_path << "):\n";
+        std::cout << gpu_mem.raw_report << "\n";
+    } else {
+        std::cout << "\nGPU memory snapshot not available on this device (kgsl/mali stats not exposed).\n";
+    }
+    
+    tflite_runner::OpPlacementStats op_stats = runner.GetOpPlacementStats();
+    std::cout << "\nDelegate placement:\n";
+    std::cout << "  GPU ops: " << op_stats.gpu_ops << " / " << op_stats.total_ops << "\n";
+    std::cout << "  CPU ops: " << op_stats.cpu_ops << " / " << op_stats.total_ops << "\n";
+    if (config.use_gpu) {
+        if (op_stats.cpu_ops == 0 && op_stats.total_ops > 0) {
+            std::cout << "  All operations ran on the GPU delegate.\n";
+        } else if (op_stats.cpu_ops > 0) {
+            std::cout << "  WARNING: Some ops fell back to CPU; adjust the model/delegate for full GPU coverage.\n";
+        }
+    }
     
     // Get output shape
     std::vector<int> output_shape = runner.GetOutputShape();
@@ -220,41 +260,14 @@ int main(int argc, char* argv[]) {
         }
     }
     
-    std::cout << "\n=== Execution completed successfully ===\n";
-    
-    // Print profiling information
-    std::cout << "\n=== Performance Profiling ===\n";
-    const auto& stats = runner.GetTimingStats();
-    std::cout << "Model Load:         " << std::fixed << std::setprecision(2) 
-              << stats.model_load_ms << " ms\n";
-    std::cout << "Delegate Init:      " << stats.delegate_init_ms << " ms\n";
-    std::cout << "Tensor Allocation:  " << stats.tensor_allocation_ms << " ms\n";
-    std::cout << "Input Copy:         " << stats.input_copy_ms << " ms\n";
-    std::cout << "Inference:          " << stats.inference_ms << " ms\n";
-    std::cout << "Output Copy:        " << stats.output_copy_ms << " ms\n";
-    std::cout << "Total Runtime:      " << stats.total_ms << " ms\n";
-    
-    // Print operation placement stats
-    auto op_stats = runner.GetOpPlacementStats();
-    std::cout << "\n=== Operation Placement ===\n";
-    std::cout << "Total Operations:   " << op_stats.total_ops << "\n";
-    std::cout << "GPU Operations:     " << op_stats.gpu_ops << " ("
-              << std::fixed << std::setprecision(1)
-              << (op_stats.total_ops > 0 ? (100.0 * op_stats.gpu_ops / op_stats.total_ops) : 0.0)
-              << "%)\n";
-    std::cout << "CPU Operations:     " << op_stats.cpu_ops << " ("
-              << (op_stats.total_ops > 0 ? (100.0 * op_stats.cpu_ops / op_stats.total_ops) : 0.0)
-              << "%)\n";
-    
     if (!op_stats.cpu_op_names.empty()) {
-        std::cout << "\nOperations running on CPU:\n";
+        std::cout << "  Ops executed on CPU:\n";
         for (const auto& op_name : op_stats.cpu_op_names) {
-            std::cout << "  - " << op_name << "\n";
+            std::cout << "    - " << op_name << "\n";
         }
     }
     
-    std::cout << "\n====================================\n";
-    
+    std::cout << "\n=== Execution completed successfully ===\n";
     LOGI("TensorFlow Lite Runner finished successfully");
     
     return 0;
