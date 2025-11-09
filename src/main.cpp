@@ -65,6 +65,16 @@ std::vector<std::string> GenerateAutoOutputNames(const tflite_runner::TFLiteRunn
     return names;
 }
 
+std::string DerivePngPath(const std::string& npy_path) {
+    std::filesystem::path p(npy_path);
+    if (p.extension() == ".npy") {
+        p.replace_extension(".png");
+    } else {
+        p += ".png";
+    }
+    return p.string();
+}
+
 void EnsureDirectoryExists(const std::string& path) {
     if (path.empty()) return;
     std::error_code ec;
@@ -80,6 +90,45 @@ void EnsureParentDirectory(const std::string& file_path) {
     }
 }
 
+bool ExtractImageDims(const std::vector<size_t>& shape, int& width, int& height, int& channels) {
+    width = 0;
+    height = 0;
+    channels = 1;
+    if (shape.empty()) {
+        return false;
+    }
+    if (shape.size() == 4) {
+        // Assume NHWC
+        if (shape[0] != 1) return false;
+        height = static_cast<int>(shape[1]);
+        width = static_cast<int>(shape[2]);
+        channels = static_cast<int>(shape[3]);
+        return width > 0 && height > 0 && (channels == 1 || channels == 3 || channels == 4);
+    }
+    if (shape.size() == 3) {
+        // Either HWC or CHW
+        if (shape[2] == 1 || shape[2] == 3 || shape[2] == 4) {
+            height = static_cast<int>(shape[0]);
+            width = static_cast<int>(shape[1]);
+            channels = static_cast<int>(shape[2]);
+            return width > 0 && height > 0;
+        }
+        if (shape[0] == 1 || shape[0] == 3 || shape[0] == 4) {
+            channels = static_cast<int>(shape[0]);
+            height = static_cast<int>(shape[1]);
+            width = static_cast<int>(shape[2]);
+            return width > 0 && height > 0;
+        }
+    }
+    if (shape.size() == 2) {
+        height = static_cast<int>(shape[0]);
+        width = static_cast<int>(shape[1]);
+        channels = 1;
+        return width > 0 && height > 0;
+    }
+    return false;
+}
+
 }  // namespace
 
 void print_usage(const char* program_name) {
@@ -91,11 +140,12 @@ void print_usage(const char* program_name) {
     std::cout << "  --output <path>      Path to output .npy file (repeatable, optional)\n";
     std::cout << "\nOptional options:\n";
     std::cout << "  --output-dir <path>  Directory for auto-generated outputs (default: ./outputs)\n";
-    std::cout << "  --output-png <path>  Path to output .png file (for image outputs)\n";
+    std::cout << "  --output-png <path>  Override PNG path for the first output (PNG files are saved automatically)\n";
     std::cout << "  --no-gpu            Disable GPU delegate (use CPU only)\n";
     std::cout << "  --help              Show this help message\n";
     std::cout << "\nExample:\n";
     std::cout << "  " << program_name << " --model model.tflite --input input.npy --output output.npy --output-png output.png\n";
+    std::cout << "\nPNG snapshots are automatically generated for image-like outputs.\n";
 }
 
 struct Config {
@@ -307,6 +357,16 @@ int main(int argc, char* argv[]) {
             resolved_output_paths.push_back(JoinPath(config.output_dir, auto_names[i]));
         }
     }
+
+    std::vector<std::string> resolved_png_paths(output_count);
+    for (size_t i = 0; i < output_count; ++i) {
+        resolved_png_paths[i] = DerivePngPath(resolved_output_paths[i]);
+        EnsureParentDirectory(resolved_png_paths[i]);
+    }
+    if (!config.output_png_path.empty() && !resolved_png_paths.empty()) {
+        resolved_png_paths[0] = config.output_png_path;
+        EnsureParentDirectory(resolved_png_paths[0]);
+    }
     
     std::cout << "Inference completed successfully\n";
     
@@ -317,7 +377,8 @@ int main(int argc, char* argv[]) {
             std::cout << output_shapes[i][j];
             if (j + 1 < output_shapes[i].size()) std::cout << ", ";
         }
-        std::cout << "], file = " << resolved_output_paths[i] << "\n";
+        std::cout << "], npy = " << resolved_output_paths[i]
+                  << ", png = " << resolved_png_paths[i] << "\n";
     }
     runner.PrintProfilingInfo();
     
@@ -360,60 +421,27 @@ int main(int argc, char* argv[]) {
         }
     }
     
-    // Save output as NPY
-    std::cout << "\nSaving output NPY files...\n";
+    // Save outputs
+    std::cout << "\nSaving output files (NPY + PNG)...\n";
     for (size_t i = 0; i < output_count; ++i) {
-        if (!tflite_runner::NPYWriter::SaveNPY(resolved_output_paths[i], outputs[i], output_shapes[i])) {
-            std::cerr << "Failed to save output tensor " << i << " to " << resolved_output_paths[i] << "\n";
+        const auto& npy_path = resolved_output_paths[i];
+        const auto& png_path = resolved_png_paths[i];
+        if (!tflite_runner::NPYWriter::SaveNPY(npy_path, outputs[i], output_shapes[i])) {
+            std::cerr << "Failed to save output tensor " << i << " to " << npy_path << "\n";
             return 1;
         }
-        std::cout << "  ✓ Tensor[" << i << "] -> " << resolved_output_paths[i] << "\n";
-    }
-    
-    // Save output as PNG if requested and if it's image-like data (first output)
-    if (!config.output_png_path.empty()) {
-        std::cout << "\nSaving output PNG...\n";
-        const auto& output_shape = output_shapes[0];
-        const auto& output_data = outputs[0];
+        std::cout << "  ✓ Tensor[" << i << "] NPY -> " << npy_path << "\n";
         
-        // Try to interpret output as image
         int width = 0, height = 0, channels = 1;
-        
-        if (output_shape.size() == 4) {
-            // NHWC format (batch, height, width, channels)
-            if (output_shape[0] == 1) {
-                height = static_cast<int>(output_shape[1]);
-                width = static_cast<int>(output_shape[2]);
-                channels = static_cast<int>(output_shape[3]);
-            }
-        } else if (output_shape.size() == 3) {
-            // HWC format (height, width, channels)
-            height = static_cast<int>(output_shape[0]);
-            width = static_cast<int>(output_shape[1]);
-            channels = static_cast<int>(output_shape[2]);
-        } else if (output_shape.size() == 2) {
-            // HW format (height, width) - grayscale
-            height = static_cast<int>(output_shape[0]);
-            width = static_cast<int>(output_shape[1]);
-            channels = 1;
-        }
-        
-        if (width > 0 && height > 0 && (channels == 1 || channels == 3 || channels == 4)) {
-            EnsureParentDirectory(config.output_png_path);
-            if (tflite_runner::ImageUtils::SaveAsPNG(config.output_png_path, output_data,
-                                                     width, height, channels)) {
-                std::cout << "PNG saved to: " << config.output_png_path << "\n";
+        if (ExtractImageDims(output_shapes[i], width, height, channels)) {
+            EnsureParentDirectory(png_path);
+            if (tflite_runner::ImageUtils::SaveAsPNG(png_path, outputs[i], width, height, channels)) {
+                std::cout << "    PNG saved -> " << png_path << "\n";
             } else {
-                std::cerr << "Warning: Failed to save PNG\n";
+                std::cerr << "    Warning: Failed to save PNG for tensor " << i << "\n";
             }
         } else {
-            std::cerr << "Warning: Output shape not suitable for PNG conversion\n";
-            std::cerr << "Expected image-like dimensions, got: ";
-            for (size_t i = 0; i < output_shape.size(); i++) {
-                std::cerr << output_shape[i];
-                if (i < output_shape.size() - 1) std::cerr << "x";
-            }
-            std::cerr << "\n";
+            std::cout << "    PNG skipped (tensor " << i << " not image-like)\n";
         }
     }
     

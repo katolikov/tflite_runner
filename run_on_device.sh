@@ -49,6 +49,15 @@ function detect_libcxx_path() {
     return 1
 }
 
+function derive_png_filename() {
+    local npy="$1"
+    if [[ "$npy" == *.npy ]]; then
+        echo "${npy%.npy}.png"
+    else
+        echo "${npy}.png"
+    fi
+}
+
 function show_usage() {
     echo "Usage: $0 [OPTIONS] <model.tflite> <output.npy> [output.png]"
     echo "       Legacy positional input: $0 [OPTIONS] <model.tflite> <input.npy> <output.npy> [output.png]"
@@ -150,6 +159,7 @@ OUTPUT_FILES=()
 HOST_OUTPUT_DIR="outputs"
 POSITIONAL=()
 OUTPUT_PNG=""
+CUSTOM_PNG_FOR_FIRST=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -260,6 +270,7 @@ fi
 
 if [ $# -ge 1 ]; then
     OUTPUT_PNG="$1"
+    CUSTOM_PNG_FOR_FIRST=true
 fi
 
 # Check if files exist
@@ -421,6 +432,16 @@ else
         mkdir -p "$(dirname "$dest")" >/dev/null 2>&1
         $ADB pull "$DEVICE_DIR/${OUTPUT_BASENAMES[$idx]}" "$dest" > /dev/null
         echo "  ✓ $dest"
+
+        if [ "$CUSTOM_PNG_FOR_FIRST" != "true" ] || [ "$idx" -ne 0 ]; then
+            device_png=$(derive_png_filename "${OUTPUT_BASENAMES[$idx]}")
+            host_png=$(derive_png_filename "$dest")
+            if $ADB shell "test -f $DEVICE_DIR/$device_png" 2>/dev/null; then
+                mkdir -p "$(dirname "$host_png")" >/dev/null 2>&1
+                $ADB pull "$DEVICE_DIR/$device_png" "$host_png" > /dev/null
+                echo "    ✓ $host_png"
+            fi
+        fi
     done
 fi
 
