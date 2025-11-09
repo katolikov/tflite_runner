@@ -16,18 +16,54 @@ BLUE='\033[0;34m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
+function detect_libcxx_path() {
+    local ndk_path="$1"
+    local abi="$2"
+    local triple=""
+
+    case "$abi" in
+        arm64-v8a) triple="aarch64-linux-android" ;;
+        armeabi-v7a) triple="arm-linux-androideabi" ;;
+        x86) triple="i686-linux-android" ;;
+        x86_64) triple="x86_64-linux-android" ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    local prebuilt_dir="$ndk_path/toolchains/llvm/prebuilt"
+    if [ ! -d "$prebuilt_dir" ]; then
+        return 1
+    fi
+
+    for host_dir in "$prebuilt_dir"/*; do
+        if [ -d "$host_dir/sysroot/usr/lib/$triple" ]; then
+            local candidate="$host_dir/sysroot/usr/lib/$triple/libc++_shared.so"
+            if [ -f "$candidate" ]; then
+                echo "$candidate"
+                return 0
+            fi
+        fi
+    done
+
+    return 1
+}
+
 function show_usage() {
-    echo "Usage: $0 [OPTIONS] <model.tflite> <input.npy> <output.npy> [output.png]"
+    echo "Usage: $0 [OPTIONS] <model.tflite> <output.npy> [output.png]"
+    echo "       Legacy positional input: $0 [OPTIONS] <model.tflite> <input.npy> <output.npy> [output.png]"
     echo ""
     echo "Options:"
     echo "  -d, --device SERIAL    Target specific device by serial number"
     echo "  -l, --list             List available devices"
+    echo "  --input PATH          Add an input .npy file (repeat for multiple inputs)"
+    echo "  --inputs CSV          Comma-separated list of input .npy files"
     echo "  --no-gpu              Disable GPU acceleration"
     echo "  -h, --help            Show this help message"
     echo ""
     echo "Examples:"
     echo "  $0 --list"
-    echo "  $0 -d R5CR30KPVEZ model.tflite input.npy output.npy"
+    echo "  $0 -d SERIAL model.tflite output.npy --input alpha.npy --input img1.npy --input img2.npy"
     echo "  $0 model.tflite input.npy output.npy output.png"
 }
 
@@ -107,6 +143,8 @@ function get_adb_cmd() {
 DEVICE_SERIAL=""
 LIST_ONLY=false
 USE_GPU=true
+INPUT_FILES=()
+POSITIONAL=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -122,6 +160,28 @@ while [[ $# -gt 0 ]]; do
             USE_GPU=false
             shift
             ;;
+        --input)
+            if [ $# -lt 2 ]; then
+                echo -e "${RED}Error: --input requires a path${NC}"
+                exit 1
+            fi
+            INPUT_FILES+=("$2")
+            shift 2
+            ;;
+        --inputs)
+            if [ $# -lt 2 ]; then
+                echo -e "${RED}Error: --inputs requires a comma-separated list${NC}"
+                exit 1
+            fi
+            IFS=',' read -ra EXTRA_INPUTS <<< "$2"
+            for item in "${EXTRA_INPUTS[@]}"; do
+                trimmed="$(echo "$item" | xargs)"
+                if [ -n "$trimmed" ]; then
+                    INPUT_FILES+=("$trimmed")
+                fi
+            done
+            shift 2
+            ;;
         -h|--help)
             show_usage
             exit 0
@@ -132,10 +192,13 @@ while [[ $# -gt 0 ]]; do
             exit 1
             ;;
         *)
-            break
+            POSITIONAL+=("$1")
+            shift
             ;;
     esac
 done
+
+set -- "${POSITIONAL[@]}"
 
 # Handle list-only mode
 if [ "$LIST_ONLY" = true ]; then
@@ -143,18 +206,35 @@ if [ "$LIST_ONLY" = true ]; then
     exit 0
 fi
 
-# Validate arguments
-if [ $# -lt 3 ]; then
-    echo -e "${RED}Error: Missing required arguments${NC}"
-    echo ""
-    show_usage
+NDK_PATH="${ANDROID_NDK_HOME:-$ANDROID_NDK}"
+if [ -z "$NDK_PATH" ]; then
+    echo -e "${RED}Error: ANDROID_NDK_HOME or ANDROID_NDK must be set to locate libc++_shared.so${NC}"
     exit 1
 fi
 
-MODEL_PATH="$1"
-INPUT_NPY="$2"
-OUTPUT_NPY="$3"
-OUTPUT_PNG="${4:-}"
+# Validate arguments / legacy positional handling
+if [ ${#INPUT_FILES[@]} -eq 0 ]; then
+    if [ $# -lt 3 ]; then
+        echo -e "${RED}Error: Missing required arguments${NC}"
+        echo ""
+        show_usage
+        exit 1
+    fi
+    MODEL_PATH="$1"
+    INPUT_FILES+=("$2")
+    OUTPUT_NPY="$3"
+    OUTPUT_PNG="${4:-}"
+else
+    if [ $# -lt 2 ]; then
+        echo -e "${RED}Error: Missing required arguments (need model and output)${NC}"
+        echo ""
+        show_usage
+        exit 1
+    fi
+    MODEL_PATH="$1"
+    OUTPUT_NPY="$2"
+    OUTPUT_PNG="${3:-}"
+fi
 
 # Check if files exist
 if [ ! -f "$MODEL_PATH" ]; then
@@ -162,10 +242,12 @@ if [ ! -f "$MODEL_PATH" ]; then
     exit 1
 fi
 
-if [ ! -f "$INPUT_NPY" ]; then
-    echo -e "${RED}Error: Input NPY file not found: $INPUT_NPY${NC}"
-    exit 1
-fi
+for input_file in "${INPUT_FILES[@]}"; do
+    if [ ! -f "$input_file" ]; then
+        echo -e "${RED}Error: Input NPY file not found: $input_file${NC}"
+        exit 1
+    fi
+done
 
 # Check device
 check_device "$DEVICE_SERIAL"
@@ -185,7 +267,10 @@ fi
 echo -e "${GREEN}Device Model:        ${NC} $DEVICE_MODEL"
 echo -e "${GREEN}Device Architecture: ${NC} $DEVICE_CPU_ABI"
 echo -e "${GREEN}Model:               ${NC} $MODEL_PATH"
-echo -e "${GREEN}Input:               ${NC} $INPUT_NPY"
+echo -e "${GREEN}Inputs:${NC}"
+for idx in "${!INPUT_FILES[@]}"; do
+    echo "  [$idx] ${INPUT_FILES[$idx]}"
+done
 echo -e "${GREEN}Output NPY:          ${NC} $OUTPUT_NPY"
 if [ -n "$OUTPUT_PNG" ]; then
     echo -e "${GREEN}Output PNG:          ${NC} $OUTPUT_PNG"
@@ -202,6 +287,17 @@ elif [[ "$DEVICE_CPU_ABI" == "armeabi"* ]] && [ "$ANDROID_ABI" != "armeabi-v7a" 
     echo -e "${YELLOW}Warning: Device is 32-bit but binary is built for $ANDROID_ABI${NC}"
     echo "Consider rebuilding with: ANDROID_ABI=armeabi-v7a ./build.sh"
     echo ""
+fi
+
+MODEL_BASENAME=$(basename "$MODEL_PATH")
+INPUT_BASENAMES=()
+for input_file in "${INPUT_FILES[@]}"; do
+    INPUT_BASENAMES+=("$(basename "$input_file")")
+done
+OUTPUT_BASENAME=$(basename "$OUTPUT_NPY")
+OUTPUT_PNG_BASENAME=""
+if [ -n "$OUTPUT_PNG" ]; then
+    OUTPUT_PNG_BASENAME=$(basename "$OUTPUT_PNG")
 fi
 
 # Build if needed
@@ -223,21 +319,31 @@ if [ -f "third_party/libs/$ANDROID_ABI/libtensorflowlite_gpu_jni.so" ]; then
     $ADB push "third_party/libs/$ANDROID_ABI/libtensorflowlite_gpu_jni.so" "$DEVICE_DIR/" > /dev/null
 fi
 
+LIBCXX_PATH=$(detect_libcxx_path "$NDK_PATH" "$ANDROID_ABI")
+if [ -n "$LIBCXX_PATH" ]; then
+    $ADB push "$LIBCXX_PATH" "$DEVICE_DIR/" > /dev/null
+else
+    echo -e "${YELLOW}Warning: Could not locate libc++_shared.so for ABI $ANDROID_ABI. The binary may fail to run if it is missing on the device.${NC}"
+fi
+
 $ADB shell "chmod +x $DEVICE_DIR/tflite_runner"
 
 # Push model and input
 echo "Step 2: Pushing model and input data..."
-MODEL_BASENAME=$(basename "$MODEL_PATH")
-INPUT_BASENAME=$(basename "$INPUT_NPY")
-
-$ADB push "$MODEL_PATH" "$DEVICE_DIR/" > /dev/null
-$ADB push "$INPUT_NPY" "$DEVICE_DIR/" > /dev/null
+$ADB push "$MODEL_PATH" "$DEVICE_DIR/$MODEL_BASENAME" > /dev/null
+for idx in "${!INPUT_FILES[@]}"; do
+    $ADB push "${INPUT_FILES[$idx]}" "$DEVICE_DIR/${INPUT_BASENAMES[$idx]}" > /dev/null
+done
 
 # Construct command
-CMD="cd $DEVICE_DIR && LD_LIBRARY_PATH=. ./tflite_runner --model $MODEL_BASENAME --input $INPUT_BASENAME --output $OUTPUT_NPY"
+CMD="cd $DEVICE_DIR && LD_LIBRARY_PATH=. ./tflite_runner --model $MODEL_BASENAME"
+for base in "${INPUT_BASENAMES[@]}"; do
+    CMD="$CMD --input $base"
+done
+CMD="$CMD --output $OUTPUT_BASENAME"
 
-if [ -n "$OUTPUT_PNG" ]; then
-    CMD="$CMD --output-png $OUTPUT_PNG"
+if [ -n "$OUTPUT_PNG_BASENAME" ]; then
+    CMD="$CMD --output-png $OUTPUT_PNG_BASENAME"
 fi
 
 if [ "$USE_GPU" = false ]; then
@@ -254,12 +360,14 @@ echo -e "${BLUE}============================================${NC}"
 # Pull results
 echo ""
 echo "Step 4: Retrieving results..."
-$ADB pull "$DEVICE_DIR/$OUTPUT_NPY" . > /dev/null
+mkdir -p "$(dirname "$OUTPUT_NPY")" >/dev/null 2>&1
+$ADB pull "$DEVICE_DIR/$OUTPUT_BASENAME" "$OUTPUT_NPY" > /dev/null
 echo "  ✓ $OUTPUT_NPY"
 
 if [ -n "$OUTPUT_PNG" ]; then
-    if $ADB shell "test -f $DEVICE_DIR/$OUTPUT_PNG" 2>/dev/null; then
-        $ADB pull "$DEVICE_DIR/$OUTPUT_PNG" . > /dev/null
+    if $ADB shell "test -f $DEVICE_DIR/$OUTPUT_PNG_BASENAME" 2>/dev/null; then
+        mkdir -p "$(dirname "$OUTPUT_PNG")" >/dev/null 2>&1
+        $ADB pull "$DEVICE_DIR/$OUTPUT_PNG_BASENAME" "$OUTPUT_PNG" > /dev/null
         echo "  ✓ $OUTPUT_PNG"
     fi
 fi

@@ -17,7 +17,7 @@ void print_usage(const char* program_name) {
     std::cout << "Usage: " << program_name << " [options]\n";
     std::cout << "\nRequired options:\n";
     std::cout << "  --model <path>       Path to .tflite model file\n";
-    std::cout << "  --input <path>       Path to input .npy file\n";
+    std::cout << "  --input <path>       Path to input .npy file (repeatable)\n";
     std::cout << "  --output <path>      Path to output .npy file\n";
     std::cout << "\nOptional options:\n";
     std::cout << "  --output-png <path>  Path to output .png file (for image outputs)\n";
@@ -29,7 +29,7 @@ void print_usage(const char* program_name) {
 
 struct Config {
     std::string model_path;
-    std::string input_path;
+    std::vector<std::string> input_paths;
     std::string output_path;
     std::string output_png_path;
     bool use_gpu = true;
@@ -45,7 +45,7 @@ bool parse_arguments(int argc, char* argv[], Config& config) {
         } else if (arg == "--model" && i + 1 < argc) {
             config.model_path = argv[++i];
         } else if (arg == "--input" && i + 1 < argc) {
-            config.input_path = argv[++i];
+            config.input_paths.push_back(argv[++i]);
         } else if (arg == "--output" && i + 1 < argc) {
             config.output_path = argv[++i];
         } else if (arg == "--output-png" && i + 1 < argc) {
@@ -63,8 +63,8 @@ bool parse_arguments(int argc, char* argv[], Config& config) {
         std::cerr << "Error: --model is required\n";
         return false;
     }
-    if (config.input_path.empty()) {
-        std::cerr << "Error: --input is required\n";
+    if (config.input_paths.empty()) {
+        std::cerr << "Error: At least one --input is required\n";
         return false;
     }
     if (config.output_path.empty()) {
@@ -89,7 +89,10 @@ int main(int argc, char* argv[]) {
     
     std::cout << "=== TensorFlow Lite Runner ===\n";
     std::cout << "Model: " << config.model_path << "\n";
-    std::cout << "Input: " << config.input_path << "\n";
+    std::cout << "Inputs (" << config.input_paths.size() << "):\n";
+    for (size_t i = 0; i < config.input_paths.size(); ++i) {
+        std::cout << "  [" << i << "] " << config.input_paths[i] << "\n";
+    }
     std::cout << "Output NPY: " << config.output_path << "\n";
     if (!config.output_png_path.empty()) {
         std::cout << "Output PNG: " << config.output_png_path << "\n";
@@ -121,37 +124,58 @@ int main(int argc, char* argv[]) {
     
     // Load input data
     std::cout << "Loading input data...\n";
-    std::vector<float> input_data;
-    std::vector<size_t> input_shape;
+    std::vector<std::vector<float>> inputs_data;
+    inputs_data.reserve(config.input_paths.size());
     
-    if (!tflite_runner::NPYReader::LoadNPY(config.input_path, input_data, input_shape)) {
-        std::cerr << "Failed to load input NPY file\n";
-        return 1;
+    for (size_t idx = 0; idx < config.input_paths.size(); ++idx) {
+        const auto& input_path = config.input_paths[idx];
+        std::vector<float> input_data;
+        std::vector<size_t> input_shape;
+        
+        if (!tflite_runner::NPYReader::LoadNPY(input_path, input_data, input_shape)) {
+            std::cerr << "Failed to load input NPY file: " << input_path << "\n";
+            return 1;
+        }
+        
+        std::cout << "Input[" << idx << "] loaded: shape = [";
+        for (size_t i = 0; i < input_shape.size(); i++) {
+            std::cout << input_shape[i];
+            if (i < input_shape.size() - 1) std::cout << ", ";
+        }
+        std::cout << "], size = " << input_data.size() << "\n";
+        
+        inputs_data.push_back(std::move(input_data));
     }
     
-    std::cout << "Input loaded: shape = [";
-    for (size_t i = 0; i < input_shape.size(); i++) {
-        std::cout << input_shape[i];
-        if (i < input_shape.size() - 1) std::cout << ", ";
+    int model_input_count = runner.GetInputTensorCount();
+    std::cout << "Model expects " << model_input_count << " input(s)\n";
+    for (int i = 0; i < model_input_count; ++i) {
+        std::vector<int> model_input_shape = runner.GetInputShape(i);
+        std::cout << "  Model Input[" << i << "] shape: [";
+        for (size_t j = 0; j < model_input_shape.size(); j++) {
+            std::cout << model_input_shape[j];
+            if (j < model_input_shape.size() - 1) std::cout << ", ";
+        }
+        std::cout << "]\n";
     }
-    std::cout << "], size = " << input_data.size() << "\n";
-    
-    // Verify input shape matches model
-    std::vector<int> model_input_shape = runner.GetInputShape();
-    std::cout << "Model expects input shape: [";
-    for (size_t i = 0; i < model_input_shape.size(); i++) {
-        std::cout << model_input_shape[i];
-        if (i < model_input_shape.size() - 1) std::cout << ", ";
+    if (model_input_count > 0 &&
+        model_input_count != static_cast<int>(inputs_data.size())) {
+        std::cerr << "Warning: Model expects " << model_input_count
+                  << " inputs but " << inputs_data.size()
+                  << " were provided.\n";
     }
-    std::cout << "]\n";
     
     // Run inference
     std::cout << "\nRunning inference...\n";
-    std::vector<float> output_data;
-    
-    if (!runner.RunInference(input_data, output_data)) {
+    std::vector<std::vector<float>> outputs;
+    if (!runner.RunInferenceMulti(inputs_data, outputs)) {
         std::cerr << "Inference failed\n";
         return 1;
+    }
+    
+    std::vector<float> output_data;
+    if (!outputs.empty()) {
+        output_data = outputs[0];
     }
     
     std::cout << "Inference completed successfully\n";
